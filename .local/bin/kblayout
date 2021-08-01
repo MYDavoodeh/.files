@@ -1,10 +1,11 @@
 #!/bin/sh
-# An edited https://github.com/porras/i3-keyboard-layout/blob/master/i3-keyboard-layout by MYDavoodeh
 helpmsg='Usage: kblayout [COMMAND] [INPUTS]
 If provided with false commands this message will be prompted.
 
-Requirements are `setxkbmap`, `awk` and `grep` (optionally `dmenu` for marked
-commands).
+kblayout: a wrapper for `setxkbmap`
+
+Requirements are `setxkbmap`, basic core commands (`awk`, `grep`, etc.) and
+optionally `dmenu` for marked commands
 
 Viable commands:
   active
@@ -15,7 +16,10 @@ Viable commands:
   get    prints all the languages and variants behind your active layout
   set    sets keyboard layout(s) to the language(s) given
   switch
-         activates a layout among previously set layouts
+         adds or activates a layout among previously set layouts. If multiple
+         layouts are provided, cycles through them and while keeping prevously
+         set layouts in memory. Useful for tertiary languages that are used
+         occasionally.
 * list   puts a list of available "basic" layouts in `dmenu` for you to choose from
          if you just want to list installed layouts
          use `localctl list-x11-keymap-layouts`
@@ -33,13 +37,36 @@ Set Env var $STATUSBAR (default value "dwmblocks") to your statusbar of choice
 to have it singalled with "30" each time you run the script.
 
 Examples:
-  kblayout us
-  kblayout get
-  kblayout set us
-  kblayout cycle us ir ru-phonetic
-  kblayout switch ru-phonetic
-  kblayout list
-  kblayout variants'
+  - Set keyboard layout to `us`:
+    kblayout us
+
+  - Set keyboard layout to `us`:
+    kblayout set us
+
+  - Get the query of all the active layouts (output like `us ir`):
+    kblayout get
+
+  - Cycle through `us`, `ir` and `ru` in `phonetic` variant:
+    kblayout cycle us ir ru-phonetic
+
+  - Add `ru-phonetic` temporarily to the head of the queue (for example if
+    currently active layouts are `us ir`, the new ones will be `ru-phonetic us
+    ir`, or if they are `us ir ru-phonetic`, simply skips `ir` and goes to
+    `ru-phonetic`):
+    kblayout switch ru-phonetic
+
+  - Cycle through temporarily, newly added `ru` and `us` at the head of the
+    queue while remembering/keeping the previous layouts at the end (upon
+    repeated execusion switches between `ru` and `us` while keeping previously
+    active layouts, say `fr es us`, at the end, resulting in such queue `ru us
+    fr es`):
+    kblayout switch ru us
+
+  - Show a `dmenu` to select a langauge from:
+    kblayout list
+
+  - Show a `dmenu` to select a language and its variant:
+    kblayout variants'
 # FIXME The script is relatively way too slow (especially when cycling)
 
 activel() { # prints the first language in the query (the active layout)
@@ -49,25 +76,30 @@ activel() { # prints the first language in the query (the active layout)
 }
 
 getl() { # prints out keyboard layout in xx-variant format.
-    setxkbmap -query | awk 'BEGIN{ORS=""}
-    /layout/{langs_count=split($2, langs, ",")}
-    /variant/{variants_count=split($2, variants, ",")}
-    END{
-        {print entry(langs[1], variants[1])}
-        for(i=2; i<=langs_count; i++) {print " " entry(langs[i], variants[i])}
-        {print "\n"}
-    }
-    function entry(lang, variant){return variant==""? lang : lang "-" variant}'
-}
+    setxkbmap -query | awk 'BEGIN { ORS = "" }
+        /layout/ { langs_count = split($2, langs, ",") }
 
-switchl() { # activates a layout ($1) and keeps other layouts as alternatives ($2)
-    # $1: what you want to switch to; $2: space-separated layouts that you want to preserve
-    setl "$1" $(echo "$2" | sed -E "s/$1\s?//")
+        /variant/ { variants_count = split($2, variants, ",") }
+
+        END {
+            print entry(langs[1], variants[1])
+            for (i = 2; i <= langs_count; i++) {
+                print " " entry(langs[i], variants[i])
+            }
+            print "\n"
+        }
+
+
+        function entry(lang, variant)
+        {
+            return (variant == "" ? lang : lang "-" variant)
+        }'
 }
 
 setl() { # accepts either the layout (xx) or layout and variant separated with a dash (xx-variant)
     [ -z "$1" ] && echo "$helpmsg" && exit 1
     # Extract and group languages and their variants in 'lang,lang2,...' and 'variant,variant2,...'
+    set -- $(echo "$@" | tr ' ' '\n' | awk '!lines[$0]++ { printf "%s ", $0 }') # remove duplicates
     langs="$(echo "$1" | cut -d- -f1)"
     variants="$(echo "$1" | cut -s -d- -f2)"
     shift
@@ -91,13 +123,17 @@ listl() { # lists all the language (and possibly variants) in a dmenu to choose 
 
 case $1 in
     a*) activel ;;
-    c*)
-        shift &&
-            switchl "$(echo "$@" | grep -oP ".*$(getl | cut -d' ' -f1)-? +\\K[\\w-]+" || echo "$1")" "$*"
+    c*) # decide which one in the queue is next, put everything after it and set it
+        shift
+        setl "$(echo "$@" | grep -oP ".*$(getl | cut -d' ' -f1)-? +\\K[\\w-]+" || echo "$1")" "$@"
         ;;
     g*) getl ;;
     v*) listl with_variants ;;
     l*) listl ;;
     se*) setl "$2" ;;
-    sw*) shift && switchl "$1" "$(getl)" ;;
+    sw*) # switch to next keeping rest in line and previously selected layouts
+        shift
+        current="$(getl)"
+        setl "$(echo "$@" | grep -oP ".*$(echo "$current" | cut -d' ' -f1)-? +\\K[\\w-]+" || echo "$1")" $current
+        ;;
 esac
