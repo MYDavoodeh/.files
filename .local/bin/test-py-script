@@ -1,0 +1,56 @@
+#!/bin/sh
+# $1: path to script to test
+# $2: key-pair array file
+# $3: pytest flags
+file="/tmp/test-script.py"
+header="${2-:$1}"
+cat >"$file" <<EOF
+# START: Functions
+def iof(x) -> tuple[int, float]:
+    """Return int and float of the same number x"""
+    return (int(x), float(x))
+# END: Functions
+SCRIPT_NAME: str = "$1"
+$(cat "$header")
+# requires python-console-scripts (script_runner)
+# it gets included in other scripts with these two variables modified
+# SCRIPT_NAME: str
+# VALUES_RESULTS_PAIRS: list[tuple[list[str, ...], str|list[Any]]]
+import pytest
+
+from collections import deque
+
+
+def make_multiple_inputs(inputs):
+    if not isinstance(inputs, (list, tuple)):
+        inputs = [inputs]
+    inputs = [str(i) for i in inputs]
+    inputs = deque(inputs)
+    return lambda _: inputs.popleft()
+
+
+@pytest.mark.parametrize(
+    "values, results",
+    VALUES_RESULTS_PAIRS,
+)
+def test_script(values, results, monkeypatch, script_runner):
+    with monkeypatch.context() as m:
+        m.setitem(__builtins__, "input", make_multiple_inputs(values))
+        ret = script_runner.run(SCRIPT_NAME)
+        assert ret.success
+
+        if not isinstance(results, (list, tuple)):
+            assert ret.stdout == str(results) + "\n"
+        else:  # if a collection of results, or() them
+            final = ret.stdout == str(results[0]) + "\n"
+            for i in results[1:]:
+                if final:  # if it's already True, break
+                    break
+                final = final or (ret.stdout == str(i) + "\n")
+            if not final:
+                pytest.fail(f"{ret.stdout} didn't match any of results: {results}")
+EOF
+pytest $3 "$file"
+x=$?
+rm "$file"
+exit $x
